@@ -1,0 +1,229 @@
+---
+title: Doing it all as an app
+description: A simple website built using flask
+sidebar:
+   order: 8
+---
+
+While blueprints are good for organising the code things will start to get messy as the app grows. We can use python modules to create a more organised structure.
+
+import { FileTree } from '@astrojs/starlight/components';
+
+<FileTree>
+
+- flaskapp/
+  - static/
+    - style.css
+  - templates/
+    - index.html
+    - base.html
+  - `__init__.py`
+  - blog.py
+  - db.py
+
+</FileTree>
+
+:::tip
+Most Python projects use this structure to organise their code and should be used as for all your projects.
+:::
+
+## Creating the app
+
+Create a new folder called `flaskapp` and add a `__init__.py` file to it. This file will be the entry point for the app.
+
+```python
+// flaskapp/__init__.py
+from flask import Flask
+import contextlib
+import os
+
+def create_app(test_config=None) -> Flask:
+    app = Flask(__name__)
+    app.config.from_mapping(
+        SECRET_KEY="dev",
+        DATABASE=os.path.join(app.instance_path, "flaskapp.sqlite"),
+    )
+
+    if test_config is None:
+        # load the instance config, if it exists, when not testing
+        app.config.from_pyfile("config.py", silent=True)
+    else:
+        # load the test config if passed in
+        app.config.from_mapping(test_config)
+
+    # ensure the instance folder exists
+    with contextlib.suppress(OSError):
+        os.makedirs(app.instance_path)
+
+    @app.route("/ping")
+    def ping() -> str:
+        return "pong!"
+
+    return app
+```
+
+import { Steps } from '@astrojs/starlight/components';
+
+<Steps>
+
+1. The `create_app` function creates a new Flask app
+
+   This function is automatically called by Flask when the app is run.
+   It accepts an optional `test_config` parameter which can be used to pass in configuration values.
+
+2. Config is set
+
+   The app is configured with a `SECRET_KEY` and a `DATABASE` path.
+   The `SECRET_KEY` is used by Flask and extensions to keep data safe.
+   The `DATABASE` is the path where the SQLite database file will be stored.
+
+   :::caution
+   If this were ever going to be run in production or as a normal application the secret key should be very secure and not just `DEV`.
+   :::
+
+3. A method to load external configuration
+
+   The `config.py` file in the instance folder can be used to set configuration values.
+   This is useful for setting values that should not be in version control.
+
+4. The `instance` folder is created
+
+   The `instance` folder is created if it does not exist.
+   This folder is used to store files that should not be in version control.
+   `with contextlib.suppress(OSError):` is used to suppress the error if the folder already exists. This is similar to a `try` and `except` block.
+
+5. A ping route is added
+
+    A simple route is added to check if the app is running.
+    When the `/ping` route is accessed, the app will return `pong!`.
+
+</Steps>
+
+## Running the app
+
+To run our app we can run:
+
+```bash
+flask run --app flaskapp
+```
+
+## Adding the blog blueprint
+
+Create a new file called `blog.py` and add the following code to it.
+
+```python
+// flaskapp/blog.py
+from flask import Blueprint
+
+blog = Blueprint('blog', __name__)
+
+@blog.route('/')
+def index():
+    return 'Hello from the blog'
+```
+
+This blueprint will be used to handle all the blog related routes.
+
+## Registering the blueprint
+
+Update the `__init__.py` file to register the blueprint.
+
+```diff lang="python"
+// flaskapp/__init__.py
+    # ensure the instance folder exists
+    with contextlib.suppress(OSError):
+        os.makedirs(app.instance_path)
+
++   from .blog import blog
++   app.register_blueprint(blog)
+
+    @app.route("/ping")
+    def ping() -> str:
+        return "pong!"
+```
+
+## Setting up the db
+
+Create a new file called `db.py` and add the following code to it.
+
+```python
+// flaskapp/db.py
+import sqlite3
+from flask import current_app, g, Flask
+
+def get_db():
+    if 'db' not in g:
+        g.db = sqlite3.connect(current_app.config["DATABASE"])
+        g.db.row_factory = sqlite3.Row
+    return g.db
+
+def close_db(e=None):
+   db = g.pop("db")
+
+   if db is not None:
+       db.close()
+
+def init_app(app: Flask):
+   app.teardown_appcontext(close_db)
+```
+
+In the `__init__.py` file, import the `db` module and call the `init_app` function.
+
+```diff lang="python"
+// flaskapp/__init__.py
+    # ensure the instance folder exists
+    with contextlib.suppress(OSError):
+        os.makedirs(app.instance_path)
+
++    from .db import init_app
++    init_app(app)
+
+    from .blog import blog
+    app.register_blueprint(blog)
+```
+
+## Database Setup
+
+While we have the database setup we need to create the tables. We can do this by creating a new file called `schema.sql` in the `instance` folder.
+
+```sql
+DROP TABLE IF EXISTS post;
+CREATE TABLE post (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL
+);
+```
+
+
+
+```diff lang="python"
+// flaskapp/__init__.py
++def init_db():
++    """Create and fill the db."""
++    db = get_db()
++
++    with current_app.open_resource("schema.sql") as f:
++        db.executescript(f.read().decode("utf8"))
+
+
++@click.command("init-db")
++def init_db_command():
++    """Clear the existing data and create new tables."""
++    init_db()
++    click.echo("Initialized the database.")
+
+def init_app(app):
+    """Add teardown and cli on app creation."""
+    app.teardown_appcontext(close_db)
++    app.cli.add_command(init_db_command)
+```
+
+As we have now integrated our database into our app we can now initialise it. To do this we can run the following command:
+
+```bash
+$ flask --app flaskapp init-db
+Initialized the database.
+```
+
+You should now be able to see a flaskapp.sqlite file in the instance folder in your project which is your newly created database.
